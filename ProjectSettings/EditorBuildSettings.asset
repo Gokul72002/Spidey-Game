@@ -6,8 +6,8 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
-    path: Assets/Spidey/spidey.unity
-    guid: 8429bf6d5e0cfc04692d33f092f331cf
+    path: Assets/Project Files/spidey Scenes/spidey.unity
+    guid: 90cd8c693057f0445ba741072974703a
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
   m_UseUCBPForAssetBundles: 0
