@@ -1,4 +1,8 @@
 using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.EnhancedTouch;
+using Touch = UnityEngine.InputSystem.EnhancedTouch.Touch;
+using TouchPhase = UnityEngine.InputSystem.TouchPhase;
 
 public class SpiderMovementController : MonoBehaviour
 {
@@ -10,7 +14,7 @@ public class SpiderMovementController : MonoBehaviour
 
     [Header("Camera Settings")]
     [SerializeField] private Transform cameraTarget;
-    [SerializeField] private float mouseSensitivity = 2f;
+    [SerializeField] private float touchSensitivity = 0.2f;
     [SerializeField] private float cameraDistance = 8f;
     [SerializeField] private float cameraHeight = 3f;
     [SerializeField] private float cameraMinHeight = 1f;
@@ -18,14 +22,12 @@ public class SpiderMovementController : MonoBehaviour
     [SerializeField] private float cameraSmoothSpeed = 10f;
 
     [Header("Input Settings")]
-    [SerializeField] private bool invertMouseY = false;
-    [SerializeField] private KeyCode runKey = KeyCode.LeftShift;
+    [SerializeField] private bool invertTouchY = false;
     [SerializeField] private float runSpeedMultiplier = 2f;
 
-    [Header("Mobile Joystick")]
+    [Header("Mobile Joystick (Movement Only)")]
     [SerializeField] private bool useJoystick = true;
     [SerializeField] private VirtualJoystick movementJoystick;
-    [SerializeField] private VirtualJoystick cameraJoystick;
 
     [Header("References")]
     [SerializeField] private Camera playerCamera;
@@ -34,7 +36,6 @@ public class SpiderMovementController : MonoBehaviour
     // Movement state
     private Vector3 currentVelocity;
     private Vector3 targetVelocity;
-    private float currentRotationVelocity;
 
     // Camera state
     private float cameraRotationX;
@@ -46,9 +47,27 @@ public class SpiderMovementController : MonoBehaviour
     private float vertical;
     private bool isRunning;
 
+    // Touch camera drag state
+    private int cameraTouchId = -1;
+    private Vector2 lastTouchPosition;
+
+    // New Input System — mouse delta for editor
+    private Vector2 mouseDelta;
+    private bool rightMouseHeld;
+
     // Animation helpers
     [HideInInspector] public float currentSpeed;
     [HideInInspector] public bool isMoving;
+
+    void OnEnable()
+    {
+        EnhancedTouchSupport.Enable();
+    }
+
+    void OnDisable()
+    {
+        EnhancedTouchSupport.Disable();
+    }
 
     void Start()
     {
@@ -85,9 +104,19 @@ public class SpiderMovementController : MonoBehaviour
         }
         else
         {
-            horizontal = Input.GetAxisRaw("Horizontal");
-            vertical = Input.GetAxisRaw("Vertical");
-            isRunning = Input.GetKey(runKey);
+            // New Input System keyboard
+            var kb = Keyboard.current;
+            if (kb == null) return;
+
+            horizontal = 0f;
+            vertical = 0f;
+
+            if (kb.aKey.isPressed || kb.leftArrowKey.isPressed) horizontal -= 1f;
+            if (kb.dKey.isPressed || kb.rightArrowKey.isPressed) horizontal += 1f;
+            if (kb.sKey.isPressed || kb.downArrowKey.isPressed) vertical -= 1f;
+            if (kb.wKey.isPressed || kb.upArrowKey.isPressed) vertical += 1f;
+
+            isRunning = kb.leftShiftKey.isPressed;
         }
     }
 
@@ -96,20 +125,44 @@ public class SpiderMovementController : MonoBehaviour
         float lookX = 0f;
         float lookY = 0f;
 
-        if (useJoystick && cameraJoystick != null)
+#if UNITY_EDITOR || UNITY_STANDALONE
+        // Right-mouse drag in editor / standalone via new Input System
+        var mouse = Mouse.current;
+        if (mouse != null && mouse.rightButton.isPressed)
         {
-            Vector2 cam = cameraJoystick.Direction;
-            lookX = cam.x * mouseSensitivity * 2f;
-            lookY = cam.y * mouseSensitivity * 2f;
+            Vector2 delta = mouse.delta.ReadValue();
+            lookX = delta.x * touchSensitivity;
+            lookY = delta.y * touchSensitivity;
         }
-        else
+#else
+        // Mobile — finger drag on the RIGHT half of the screen
+        foreach (Touch touch in Touch.activeTouches)
         {
-            lookX = Input.GetAxis("Mouse X") * mouseSensitivity;
-            lookY = Input.GetAxis("Mouse Y") * mouseSensitivity;
-        }
+            // Skip fingers on the left half (joystick side)
+            if (touch.screenPosition.x < Screen.width * 0.5f)
+                continue;
 
-        if (invertMouseY)
-            lookY = -lookY;
+            if (touch.phase == TouchPhase.Began)
+            {
+                cameraTouchId     = touch.touchId;
+                lastTouchPosition = touch.screenPosition;
+            }
+            else if (touch.phase == TouchPhase.Moved && touch.touchId == cameraTouchId)
+            {
+                Vector2 delta = touch.screenPosition - lastTouchPosition;
+                lookX             =  delta.x * touchSensitivity;
+                lookY             =  delta.y * touchSensitivity;
+                lastTouchPosition = touch.screenPosition;
+            }
+            else if ((touch.phase == TouchPhase.Ended || touch.phase == TouchPhase.Canceled)
+                     && touch.touchId == cameraTouchId)
+            {
+                cameraTouchId = -1;
+            }
+        }
+#endif
+
+        if (invertTouchY) lookY = -lookY;
 
         cameraRotationY += lookX;
         cameraRotationX -= lookY;
@@ -123,34 +176,24 @@ public class SpiderMovementController : MonoBehaviour
     void HandleMovement()
     {
         Vector3 cameraForward = Vector3.ProjectOnPlane(
-            playerCamera.transform.forward,
-            Vector3.up
-        ).normalized;
+            playerCamera.transform.forward, Vector3.up).normalized;
 
         Vector3 cameraRight = Vector3.ProjectOnPlane(
-            playerCamera.transform.right,
-            Vector3.up
-        ).normalized;
+            playerCamera.transform.right, Vector3.up).normalized;
 
         Vector3 moveDirection =
             (cameraForward * vertical + cameraRight * horizontal).normalized;
 
         float speed = moveSpeed;
-        if (isRunning)
-            speed *= runSpeedMultiplier;
+        if (isRunning) speed *= runSpeedMultiplier;
 
         targetVelocity = moveDirection * speed;
 
-        float accel =
-            targetVelocity.magnitude > currentVelocity.magnitude
-                ? acceleration
-                : deceleration;
+        float accel = targetVelocity.magnitude > currentVelocity.magnitude
+            ? acceleration : deceleration;
 
         currentVelocity = Vector3.MoveTowards(
-            currentVelocity,
-            targetVelocity,
-            accel * Time.deltaTime
-        );
+            currentVelocity, targetVelocity, accel * Time.deltaTime);
 
         if (currentVelocity.magnitude > 0.01f)
         {
@@ -171,16 +214,14 @@ public class SpiderMovementController : MonoBehaviour
 
     void HandleRotation()
     {
-        if (currentVelocity.magnitude < 0.1f)
-            return;
+        if (currentVelocity.magnitude < 0.1f) return;
 
         Vector3 direction = currentVelocity.normalized;
         float targetAngle = Mathf.Atan2(direction.x, direction.z) * Mathf.Rad2Deg;
-
         float angle = Mathf.DeltaAngle(spiderBody.eulerAngles.y, targetAngle);
         float rotationStep = rotationSpeed * Time.deltaTime;
-
         float smoothAngle = Mathf.Clamp(angle, -rotationStep, rotationStep);
+
         spiderBody.Rotate(Vector3.up * smoothAngle);
     }
 
@@ -196,15 +237,13 @@ public class SpiderMovementController : MonoBehaviour
             playerCamera.transform.position,
             desiredPos,
             ref cameraVelocity,
-            1f / cameraSmoothSpeed
-        );
+            1f / cameraSmoothSpeed);
 
         Quaternion targetRot = Quaternion.Euler(cameraRotationX, cameraRotationY, 0f);
         playerCamera.transform.rotation = Quaternion.Slerp(
             playerCamera.transform.rotation,
             targetRot,
-            cameraSmoothSpeed * Time.deltaTime
-        );
+            cameraSmoothSpeed * Time.deltaTime);
     }
 
     Vector3 CalculateCameraPosition()
@@ -223,8 +262,7 @@ public class SpiderMovementController : MonoBehaviour
             basePos,
             (desiredPos - basePos).normalized,
             out RaycastHit hit,
-            Vector3.Distance(basePos, desiredPos)
-        ))
+            Vector3.Distance(basePos, desiredPos)))
         {
             desiredPos = hit.point - (desiredPos - basePos).normalized * 0.4f;
         }
@@ -238,14 +276,9 @@ public class SpiderMovementController : MonoBehaviour
 
     void InitializeCamera()
     {
-        if (!playerCamera)
-            playerCamera = Camera.main;
-
-        if (!cameraTarget)
-            cameraTarget = transform;
-
-        if (!spiderBody)
-            spiderBody = transform;
+        if (!playerCamera) playerCamera = Camera.main;
+        if (!cameraTarget) cameraTarget = transform;
+        if (!spiderBody) spiderBody = transform;
 
         cameraRotationY = transform.eulerAngles.y;
         cameraRotationX = 15f;
@@ -260,12 +293,8 @@ public class SpiderMovementController : MonoBehaviour
     public Vector3 GetMovementDirection() => currentVelocity.normalized;
 
     public void SetCameraDistance(float distance)
-    {
-        cameraDistance = Mathf.Clamp(distance, 2f, 15f);
-    }
+        => cameraDistance = Mathf.Clamp(distance, 2f, 15f);
 
     public void SetCameraHeight(float height)
-    {
-        cameraHeight = Mathf.Clamp(height, cameraMinHeight, cameraMaxHeight);
-    }
+        => cameraHeight = Mathf.Clamp(height, cameraMinHeight, cameraMaxHeight);
 }
